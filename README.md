@@ -14,13 +14,13 @@ The plugin logs events to `~/tmp/EGUIBaseviewTest.log`.
 - Run `scripts/macos-build-and-install.sh`
 - Start your DAW, test the plugin
 
-## Usage: Windows
+## Usage: Windows (Untested)
 
 - Run `cargo build`
 - Copy `target/debug/imgui_baseview_test_vst2.dll` to your VST plugin folder
 - Start your DAW, test the plugin
 
-## Usage: Linux (Untested)
+## Usage: Linux
 
 - Run `cargo build`
 - Copy `target/debug/imgui_baseview_test_vst2.so` to your VST plugin folder

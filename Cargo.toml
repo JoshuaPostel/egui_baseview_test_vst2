@@ -20,3 +20,4 @@ vst = "0.2"
 rtrb = "0.2"
 egui-baseview = {git = "https://github.com/BillyDM/egui-baseview", rev = "b7436c02309347e49ffd4491bf31cdef6e759eb7" }
 egui = "0.15"
+ringbuf = "0.2"

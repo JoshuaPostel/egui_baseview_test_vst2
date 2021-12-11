@@ -8,8 +8,17 @@ use egui::CtxRef;
 use baseview::{Size, WindowHandle, WindowOpenOptions, WindowScalePolicy};
 use vst::buffer::AudioBuffer;
 use vst::editor::Editor;
-use vst::plugin::{Category, Info, Plugin, PluginParameters};
+use vst::plugin::{CanDo, Category, Info, Plugin, PluginParameters};
 use vst::util::AtomicFloat;
+
+use vst::api::Events;
+use vst::event::Event;
+use vst::event::MidiEvent;
+use ringbuf::{Producer, Consumer, RingBuffer};
+use std::sync::Mutex;
+use log;
+use simplelog;
+
 
 use egui_baseview::{EguiWindow, Queue, RenderSettings, Settings};
 use raw_window_handle::{HasRawWindowHandle, RawWindowHandle};
@@ -19,8 +28,14 @@ use std::sync::Arc;
 const WINDOW_WIDTH: usize = 1024;
 const WINDOW_HEIGHT: usize = 512;
 
-struct TestPluginEditor {
+struct EditorState {
     params: Arc<GainEffectParameters>,
+    midi_consumer: Arc<Mutex<Consumer<[u8; 3]>>>,
+    last_note: Arc<Mutex<[u8; 3]>>,
+}
+
+struct TestPluginEditor {
+    state: Arc<EditorState>,
     window_handle: Option<WindowHandle>,
     is_open: bool,
 }
@@ -35,7 +50,7 @@ impl Editor for TestPluginEditor {
     }
 
     fn open(&mut self, parent: *mut ::std::ffi::c_void) -> bool {
-        ::log::info!("Editor open");
+        log::info!("Editor open");
         if self.is_open {
             return false;
         }
@@ -50,21 +65,38 @@ impl Editor for TestPluginEditor {
             },
             render_settings: RenderSettings::default(),
         };
-
+                    
         let window_handle = EguiWindow::open_parented(
             &VstParent(parent),
             settings,
-            self.params.clone(),
-            |_egui_ctx: &CtxRef, _queue: &mut Queue, _state: &mut Arc<GainEffectParameters>| {},
-            |egui_ctx: &CtxRef, _queue: &mut Queue, state: &mut Arc<GainEffectParameters>| {
+            self.state.clone(),
+            |_egui_ctx: &CtxRef, _queue: &mut Queue, _state: &mut Arc<EditorState>| {},
+            |egui_ctx: &CtxRef, _queue: &mut Queue, state: &mut Arc<EditorState>| {
                 egui::Window::new("egui-baseview simple demo").show(&egui_ctx, |ui| {
-                    ui.heading("My Egui Application");
-                    let mut val = state.amplitude.get();
+
+                    let mut midi_events = state.midi_consumer.lock().unwrap();
+
+                    // TODO could be dealing with lots of midi_events, not just one
+                    if let Some(n) = midi_events.pop() {
+                        log::info!("found midi data: {:?}", n);
+                        match n[0] {
+                            // note on
+                            144 => *state.last_note.lock().unwrap() = n,
+                            // note off
+                            //128 => *state.last_note.lock().unwrap() = n,
+                            _ => (),
+                        }
+                    }
+
+                    ui.heading(format!("midi data: {:?}", state.last_note.lock().unwrap()[1]));
+
+                    let mut val = state.params.amplitude.get();
                     if ui
                         .add(egui::Slider::new(&mut val, 0.0..=1.0).text("Gain"))
                         .changed()
                     {
-                        state.amplitude.set(val)
+                        log::info!("changed amplitude");
+                        state.params.amplitude.set(val)
                     }
                 });
             },
@@ -93,18 +125,27 @@ struct GainEffectParameters {
 struct TestPlugin {
     params: Arc<GainEffectParameters>,
     editor: Option<TestPluginEditor>,
+    midi_producer: Producer<[u8; 3]>,
 }
 
 impl Default for TestPlugin {
     fn default() -> Self {
+        let midi_ring = RingBuffer::<[u8; 3]>::new(1_000);
+        let (midi_producer, midi_consumer) = midi_ring.split();
         let params = Arc::new(GainEffectParameters::default());
+        let state = EditorState {
+            params: params.clone(),
+            midi_consumer: Arc::new(Mutex::new(midi_consumer)),
+            last_note: Arc::new(Mutex::new([0, 0, 0])),
+        };
         Self {
             params: params.clone(),
             editor: Some(TestPluginEditor {
-                params: params.clone(),
+                state: Arc::new(state),
                 window_handle: None,
                 is_open: false,
             }),
+            midi_producer,
         }
     }
 }
@@ -119,16 +160,17 @@ impl Default for GainEffectParameters {
 
 impl Plugin for TestPlugin {
     fn get_info(&self) -> Info {
+        log::info!("called get_info");
         Info {
             name: "Egui Gain Effect in Rust".to_string(),
             vendor: "DGriffin".to_string(),
             unique_id: 243123073,
-            version: 1,
+            version: 3,
             inputs: 2,
             outputs: 2,
             // This `parameters` bit is important; without it, none of our
             // parameters will be shown!
-            parameters: 1,
+            parameters: 2,
             category: Category::Effect,
             ..Default::default()
         }
@@ -137,22 +179,34 @@ impl Plugin for TestPlugin {
     fn init(&mut self) {
         let log_folder = ::dirs::home_dir().unwrap().join("tmp");
 
-        let _ = ::std::fs::create_dir(log_folder.clone());
+        //::std::fs::create_dir(log_folder.clone()).expect("create tmp");
 
         let log_file = ::std::fs::File::create(log_folder.join("EGUIBaseviewTest.log")).unwrap();
 
-        let log_config = ::simplelog::ConfigBuilder::new()
+        let log_config = simplelog::ConfigBuilder::new()
             .set_time_to_local(true)
             .build();
 
-        let _ = ::simplelog::WriteLogger::init(simplelog::LevelFilter::Info, log_config, log_file);
+        let _ = simplelog::WriteLogger::init(simplelog::LevelFilter::Info, log_config, log_file);
 
-        ::log_panics::init();
+        log::info!("init 4");
+    }
 
-        ::log::info!("init");
+    fn process_events(&mut self, events: &Events) {
+        //log::info!("called process_events");
+        for e in events.events() {
+            match e {
+                Event::Midi(MidiEvent { data, .. }) => {
+                    log::info!("got midi event: {:?}", data);
+                    self.midi_producer.push(data).unwrap_or(());
+                },
+                _ => (),
+            }
+        }
     }
 
     fn get_editor(&mut self) -> Option<Box<dyn Editor>> {
+        log::info!("called get_editor");
         if let Some(editor) = self.editor.take() {
             Some(Box::new(editor) as Box<dyn Editor>)
         } else {
@@ -162,6 +216,7 @@ impl Plugin for TestPlugin {
 
     // Here is where the bulk of our audio processing code goes.
     fn process(&mut self, buffer: &mut AudioBuffer<f32>) {
+        //log::info!("called process");
         // Read the amplitude from the parameter object
         let amplitude = self.params.amplitude.get();
         // First, we destructure our audio buffer into an arbitrary number of
@@ -179,7 +234,19 @@ impl Plugin for TestPlugin {
     // Return the parameter object. This method can be omitted if the
     // plugin has no parameters.
     fn get_parameter_object(&mut self) -> Arc<dyn PluginParameters> {
+        log::info!("called get_parameter_object");
         Arc::clone(&self.params) as Arc<dyn PluginParameters>
+    }
+
+    fn can_do(&self, can_do: CanDo) -> vst::api::Supported {
+        log::info!("called can_do");
+        use vst::api::Supported::*;
+        use vst::plugin::CanDo::*;
+
+        match can_do {
+            SendEvents | SendMidiEvent | ReceiveEvents | ReceiveMidiEvent => Yes,
+            _ => Maybe,
+        }
     }
 }
 

@@ -4,4 +4,4 @@
 * slider adjusts gain
 * data from most recent midi note is displayed in GUI
 
-![Demo](demo.png)
+![Demo](egui_baseview_test_vst2.png)

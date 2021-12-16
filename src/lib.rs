@@ -8,8 +8,9 @@ use egui::CtxRef;
 use baseview::{Size, WindowHandle, WindowOpenOptions, WindowScalePolicy};
 use vst::buffer::AudioBuffer;
 use vst::editor::Editor;
-use vst::plugin::{CanDo, Category, Info, Plugin, PluginParameters};
+use vst::plugin::{CanDo, Category, Info, Plugin, PluginParameters, HostCallback};
 use vst::util::AtomicFloat;
+use vst::host::Host;
 
 use vst::api::Events;
 use vst::event::Event;
@@ -126,6 +127,30 @@ struct TestPlugin {
     params: Arc<GainEffectParameters>,
     editor: Option<TestPluginEditor>,
     midi_producer: Producer<[u8; 3]>,
+    host: HostCallback,
+}
+
+impl TestPlugin {
+    fn new(host: HostCallback) -> Self {
+        let midi_ring = RingBuffer::<[u8; 3]>::new(1_000);
+        let (midi_producer, midi_consumer) = midi_ring.split();
+        let params = Arc::new(GainEffectParameters::default());
+        let state = EditorState {
+            params: params.clone(),
+            midi_consumer: Arc::new(Mutex::new(midi_consumer)),
+            last_note: Arc::new(Mutex::new([0, 0, 0])),
+        };
+        Self {
+            params: params.clone(),
+            editor: Some(TestPluginEditor {
+                state: Arc::new(state),
+                window_handle: None,
+                is_open: false,
+            }),
+            midi_producer,
+            host,
+        }
+    }
 }
 
 impl Default for TestPlugin {
@@ -146,6 +171,7 @@ impl Default for TestPlugin {
                 is_open: false,
             }),
             midi_producer,
+            host: HostCallback::default(),
         }
     }
 }
@@ -159,6 +185,10 @@ impl Default for GainEffectParameters {
 }
 
 impl Plugin for TestPlugin {
+    fn new(host: HostCallback) -> Self {
+        TestPlugin::new(host)
+    }
+
     fn get_info(&self) -> Info {
         log::info!("called get_info");
         Info {
@@ -194,15 +224,36 @@ impl Plugin for TestPlugin {
 
     fn process_events(&mut self, events: &Events) {
         //log::info!("called process_events");
+        let mut mutated_events: Vec<MidiEvent> = vec![];
         for e in events.events() {
             match e {
                 Event::Midi(MidiEvent { data, .. }) => {
                     log::info!("got midi event: {:?}", data);
                     self.midi_producer.push(data).unwrap_or(());
+                    mutated_events.push(MidiEvent { 
+                        data: [data[0], data[1] + 1, data[2]],
+                        delta_frames: 0,
+                        live: false,
+                        note_length: None,
+                        note_offset: None,
+                        detune: 0,
+                        note_off_velocity: 0,
+                    });
                 },
                 _ => (),
             }
         }
+//        let new_events = Events { 
+//            num_events: mutated_events.len() as i32,
+//            _reserved: 0,
+//            events: mutated_events,
+//        };
+        let new_events = Events { 
+            num_events: 1,
+            _reserved: 0,
+            events: [mutated_events[0], 1],
+        };
+        self.host.process_events(&new_events);
     }
 
     fn get_editor(&mut self) -> Option<Box<dyn Editor>> {

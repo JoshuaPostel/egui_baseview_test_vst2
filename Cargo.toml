@@ -16,7 +16,7 @@ log = "0.4"
 log-panics = "2"
 raw-window-handle = "0.3"
 simplelog = "0.11"
-vst = "0.2"
+vst = "0.2.1"
 rtrb = "0.2"
 egui-baseview = {git = "https://github.com/BillyDM/egui-baseview", rev = "b7436c02309347e49ffd4491bf31cdef6e759eb7" }
 egui = "0.15"

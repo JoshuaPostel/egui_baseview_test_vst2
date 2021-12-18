@@ -6,7 +6,7 @@ extern crate vst;
 use egui::CtxRef;
 
 use baseview::{Size, WindowHandle, WindowOpenOptions, WindowScalePolicy};
-use vst::buffer::AudioBuffer;
+use vst::buffer::{AudioBuffer, SendEventBuffer};
 use vst::editor::Editor;
 use vst::plugin::{CanDo, Category, Info, Plugin, PluginParameters, HostCallback};
 use vst::util::AtomicFloat;
@@ -128,6 +128,7 @@ struct TestPlugin {
     editor: Option<TestPluginEditor>,
     midi_producer: Producer<[u8; 3]>,
     host: HostCallback,
+    send_buffer: SendEventBuffer,
 }
 
 impl TestPlugin {
@@ -149,6 +150,7 @@ impl TestPlugin {
             }),
             midi_producer,
             host,
+            send_buffer: SendEventBuffer::default(),
         }
     }
 }
@@ -172,6 +174,7 @@ impl Default for TestPlugin {
             }),
             midi_producer,
             host: HostCallback::default(),
+            send_buffer: SendEventBuffer::default(),
         }
     }
 }
@@ -202,6 +205,7 @@ impl Plugin for TestPlugin {
             // parameters will be shown!
             parameters: 2,
             category: Category::Effect,
+            midi_outputs: 1,
             ..Default::default()
         }
     }
@@ -222,39 +226,22 @@ impl Plugin for TestPlugin {
         log::info!("init 4");
     }
 
-    fn process_events(&mut self, events: &Events) {
-        //log::info!("called process_events");
-        let mut mutated_events: Vec<MidiEvent> = vec![];
+    fn process_events(&mut self, events: &vst::api::Events) {
+        let mut output_midi_events: Vec<vst::event::MidiEvent> = vec![];
         for e in events.events() {
             match e {
-                Event::Midi(MidiEvent { data, .. }) => {
-                    log::info!("got midi event: {:?}", data);
-                    self.midi_producer.push(data).unwrap_or(());
-                    mutated_events.push(MidiEvent { 
-                        data: [data[0], data[1] + 1, data[2]],
-                        delta_frames: 0,
-                        live: false,
-                        note_length: None,
-                        note_offset: None,
-                        detune: 0,
-                        note_off_velocity: 0,
-                    });
+                Event::Midi(mut midi_event) => {
+                    log::info!("got midi event: {:?}", midi_event.data);
+                    self.midi_producer.push(midi_event.data).unwrap_or(());
+                    midi_event.data[1] += 12; // pictch notes up an octive
+                    output_midi_events.push(midi_event);
                 },
                 _ => (),
             }
         }
-//        let new_events = Events { 
-//            num_events: mutated_events.len() as i32,
-//            _reserved: 0,
-//            events: mutated_events,
-//        };
-        let new_events = Events { 
-            num_events: 1,
-            _reserved: 0,
-            events: [mutated_events[0], 1],
-        };
-        self.host.process_events(&new_events);
+        self.send_buffer.send_events(&output_midi_events, &mut self.host);
     }
+
 
     fn get_editor(&mut self) -> Option<Box<dyn Editor>> {
         log::info!("called get_editor");

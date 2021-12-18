@@ -6,10 +6,11 @@ extern crate vst;
 use egui::CtxRef;
 
 use baseview::{Size, WindowHandle, WindowOpenOptions, WindowScalePolicy};
-use vst::buffer::AudioBuffer;
+use vst::buffer::{AudioBuffer, SendEventBuffer};
 use vst::editor::Editor;
-use vst::plugin::{CanDo, Category, Info, Plugin, PluginParameters};
+use vst::plugin::{CanDo, Category, Info, Plugin, PluginParameters, HostCallback};
 use vst::util::AtomicFloat;
+use vst::host::Host;
 
 use vst::api::Events;
 use vst::event::Event;
@@ -126,6 +127,32 @@ struct TestPlugin {
     params: Arc<GainEffectParameters>,
     editor: Option<TestPluginEditor>,
     midi_producer: Producer<[u8; 3]>,
+    host: HostCallback,
+    send_buffer: SendEventBuffer,
+}
+
+impl TestPlugin {
+    fn new(host: HostCallback) -> Self {
+        let midi_ring = RingBuffer::<[u8; 3]>::new(1_000);
+        let (midi_producer, midi_consumer) = midi_ring.split();
+        let params = Arc::new(GainEffectParameters::default());
+        let state = EditorState {
+            params: params.clone(),
+            midi_consumer: Arc::new(Mutex::new(midi_consumer)),
+            last_note: Arc::new(Mutex::new([0, 0, 0])),
+        };
+        Self {
+            params: params.clone(),
+            editor: Some(TestPluginEditor {
+                state: Arc::new(state),
+                window_handle: None,
+                is_open: false,
+            }),
+            midi_producer,
+            host,
+            send_buffer: SendEventBuffer::default(),
+        }
+    }
 }
 
 impl Default for TestPlugin {
@@ -146,6 +173,8 @@ impl Default for TestPlugin {
                 is_open: false,
             }),
             midi_producer,
+            host: HostCallback::default(),
+            send_buffer: SendEventBuffer::default(),
         }
     }
 }
@@ -159,6 +188,10 @@ impl Default for GainEffectParameters {
 }
 
 impl Plugin for TestPlugin {
+    fn new(host: HostCallback) -> Self {
+        TestPlugin::new(host)
+    }
+
     fn get_info(&self) -> Info {
         log::info!("called get_info");
         Info {
@@ -172,6 +205,7 @@ impl Plugin for TestPlugin {
             // parameters will be shown!
             parameters: 2,
             category: Category::Effect,
+            midi_outputs: 1,
             ..Default::default()
         }
     }
@@ -192,18 +226,22 @@ impl Plugin for TestPlugin {
         log::info!("init 4");
     }
 
-    fn process_events(&mut self, events: &Events) {
-        //log::info!("called process_events");
+    fn process_events(&mut self, events: &vst::api::Events) {
+        let mut output_midi_events: Vec<vst::event::MidiEvent> = vec![];
         for e in events.events() {
             match e {
-                Event::Midi(MidiEvent { data, .. }) => {
-                    log::info!("got midi event: {:?}", data);
-                    self.midi_producer.push(data).unwrap_or(());
+                Event::Midi(mut midi_event) => {
+                    log::info!("got midi event: {:?}", midi_event.data);
+                    self.midi_producer.push(midi_event.data).unwrap_or(());
+                    midi_event.data[1] += 12; // pictch notes up an octive
+                    output_midi_events.push(midi_event);
                 },
                 _ => (),
             }
         }
+        self.send_buffer.send_events(&output_midi_events, &mut self.host);
     }
+
 
     fn get_editor(&mut self) -> Option<Box<dyn Editor>> {
         log::info!("called get_editor");

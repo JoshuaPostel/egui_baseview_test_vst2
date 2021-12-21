@@ -30,12 +30,13 @@ pub fn settings() -> Settings {
 }
 
 pub fn update() -> impl FnMut(&egui::CtxRef, &mut Queue, &mut Arc<EditorState>) {
-    |egui_ctx: &CtxRef, _queue: &mut Queue, state: &mut Arc<EditorState>| {
+    |egui_ctx: &CtxRef, queue: &mut Queue, state: &mut Arc<EditorState>| {
         egui::Window::new("egui-baseview simple demo").show(&egui_ctx, |ui| {
             let mut midi_events = state.midi_consumer.lock().unwrap();
 
             // TODO could be dealing with lots of midi_events, not just one
             if let Some(n) = midi_events.pop() {
+                queue.request_repaint();
                 log::info!("found midi data: {:?}", n);
                 match n[0] {
                     // note on

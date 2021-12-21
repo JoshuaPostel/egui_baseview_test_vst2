@@ -33,11 +33,6 @@ impl TestPlugin {
         let (midi_producer, midi_consumer) = midi_ring.split();
         let params = Arc::new(DawParameters::default());
         let state = EditorState::new(&params, midi_consumer);
-        //        let state = EditorState {
-        //            params: params.clone(),
-        //            midi_consumer: Arc::new(Mutex::new(midi_consumer)),
-        //            last_note: Arc::new(Mutex::new([0, 0, 0])),
-        //        };
         Self {
             params: params.clone(),
             editor: Some(TestPluginEditor {

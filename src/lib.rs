@@ -16,7 +16,7 @@ use ringbuf::{Producer, RingBuffer};
 use simplelog;
 use vst::buffer::{AudioBuffer, SendEventBuffer};
 use vst::editor::Editor;
-use vst::event::Event;
+use vst::event::{Event, MidiEvent};
 use vst::plugin::{CanDo, Category, HostCallback, Info, Plugin, PluginParameters};
 
 struct TestPlugin {
@@ -25,6 +25,7 @@ struct TestPlugin {
     midi_producer: Producer<[u8; 3]>,
     host: HostCallback,
     send_buffer: SendEventBuffer,
+    events_buffer: Vec<MidiEvent>,
 }
 
 impl TestPlugin {
@@ -43,6 +44,7 @@ impl TestPlugin {
             midi_producer,
             host,
             send_buffer: SendEventBuffer::default(),
+            events_buffer: vec![],
         }
     }
 }
@@ -67,6 +69,9 @@ impl Default for TestPlugin {
             midi_producer,
             host: HostCallback::default(),
             send_buffer: SendEventBuffer::default(),
+            // SendEventBuffer::store_events() not public in vst-rs 0.2.1
+            // so using an extra vec for storage right now
+            events_buffer: vec![],
         }
     }
 }
@@ -111,20 +116,17 @@ impl Plugin for TestPlugin {
     }
 
     fn process_events(&mut self, events: &vst::api::Events) {
-        let mut output_midi_events: Vec<vst::event::MidiEvent> = vec![];
         for e in events.events() {
             match e {
                 Event::Midi(mut midi_event) => {
                     log::info!("got midi event: {:?}", midi_event.data);
                     self.midi_producer.push(midi_event.data).unwrap_or(());
                     midi_event.data[1] += 12; // pictch notes up an octive
-                    output_midi_events.push(midi_event);
+                    self.events_buffer.push(midi_event);
                 }
                 _ => (),
             }
         }
-        self.send_buffer
-            .send_events(&output_midi_events, &mut self.host);
     }
 
     fn get_editor(&mut self) -> Option<Box<dyn Editor>> {
@@ -150,6 +152,12 @@ impl Plugin for TestPlugin {
             for (input_sample, output_sample) in input_buffer.iter().zip(output_buffer) {
                 *output_sample = *input_sample * amplitude;
             }
+        }
+        if self.events_buffer.len() > 0 {
+            log::info!("sending {} events", self.events_buffer.len());
+            self.send_buffer
+                .send_events(&self.events_buffer, &mut self.host);
+            self.events_buffer = vec![];
         }
     }
 
